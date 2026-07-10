@@ -115,8 +115,13 @@ async def exec_shell_argv(container_id: str) -> list:
     `docker exec`. The caller (Phase 1's pty_ws.py) wraps this with a
     controller-side PTY (pty.openpty()) purely to give `docker exec` a tty -
     the shell process itself always lives inside the isolated container.
+
+    `docker exec -it` does NOT set TERM on its own - without it, full-screen
+    TUI programs (like Claude Code's interactive prompts) can't look up
+    terminfo capabilities for cursor movement/colors and emit garbled,
+    unseparated output instead.
     """
-    return ["docker", "exec", "-it", container_id, "/bin/bash"]
+    return ["docker", "exec", "-it", "-e", "TERM=xterm-256color", container_id, "/bin/bash"]
 
 
 async def stop_container(terminal_id: str) -> bool:

@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         openssh-client \
         ca-certificates \
         curl \
+        ncurses-term \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g @anthropic-ai/claude-code \
     && groupadd -g 10001 sandboxuser \

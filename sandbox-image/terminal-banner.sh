@@ -9,4 +9,8 @@ if [ -n "$PS1" ]; then
     if [ -z "$ANTHROPIC_API_KEY" ]; then
         echo "[notice] No Anthropic API key found for this session - add one under BYOK settings, then reopen this terminal, to use 'claude'."
     fi
+    if [ -n "$RG_WORKSPACE_TOKEN" ]; then
+        echo "Platform API access: \$RG_WORKSPACE_TOKEN is set (agents:*, builder:*) - e.g.:"
+        echo "  curl -H \"Authorization: Bearer \$RG_WORKSPACE_TOKEN\" https://dev-swat.com/api/v1/agents/"
+    fi
 fi

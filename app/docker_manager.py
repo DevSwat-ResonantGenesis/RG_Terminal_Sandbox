@@ -66,6 +66,7 @@ async def create_container(
     anthropic_key: Optional[str] = None,
     egress_proxy_url: Optional[str] = None,
     mount_ssh_identity: bool = False,
+    workspace_token: Optional[str] = None,
 ) -> Tuple[str, bool]:
     """Create the persistent sandbox container for a terminal_id. Idempotent:
     if a container with this terminal's name already exists, reuse it instead
@@ -76,7 +77,12 @@ async def create_container(
     `egress_proxy_url` overrides the default shared terminal_egress_proxy
     with a per-session sidecar (see create_egress_proxy) - only set when the
     user has an opt-in registered SSH host. `mount_ssh_identity` attaches
-    that user's persistent SSH identity volume when true.
+    that user's persistent SSH identity volume when true. `workspace_token`
+    (an RGW- scoped token, see workspace_tokens.py) is injected as
+    RG_WORKSPACE_TOKEN so Claude Code CLI can call the platform's own API -
+    the caller mints one unconditionally before calling this function since
+    create-vs-reuse isn't known until this call returns; it's simply unused
+    on the reuse path below.
 
     Returns (container_id, created) - `created` is False on every reuse path
     (running or restarted), True only the first time this terminal_id's
@@ -129,6 +135,8 @@ async def create_container(
     ]
     if anthropic_key:
         docker_cmd.append(f"-e=ANTHROPIC_API_KEY={anthropic_key}")
+    if workspace_token:
+        docker_cmd.append(f"-e=RG_WORKSPACE_TOKEN={workspace_token}")
     if mount_ssh_identity:
         # Read-only: the container's own ~/.ssh (tmpfs, ephemeral) gets a
         # copy of the private key placed by _seed_ssh_identity after start -
@@ -248,6 +256,34 @@ async def copy_files_into_container(container_id: str, files: list) -> None:
             )
 
 
+_SYNC_MARKER = "/workspace/.rg_last_sync"
+
+
+async def workspace_changed_since_last_sync(container_id: str) -> bool:
+    """Cheap check for the periodic sync loop: has anything under
+    /workspace been written since the last sync? Avoids doing a full
+    docker cp (copy_workspace_out) on every tick for containers with no
+    new writes. Uses a marker file's mtime rather than a network call -
+    the sandbox container has no path back to this service to report
+    changes itself (terminal_egress_net has no route to app-network).
+    """
+    rc, _, _ = await _run("docker", "exec", container_id, "test", "-f", _SYNC_MARKER)
+    if rc != 0:
+        # No marker yet - either brand new or never synced. Only treat as
+        # "changed" if there's at least one real file to sync.
+        rc2, out, _ = await _run("docker", "exec", container_id, "find", "/workspace", "-type", "f")
+        return rc2 == 0 and bool(out.strip())
+
+    rc, out, _ = await _run(
+        "docker", "exec", container_id, "find", "/workspace", "-type", "f", "-newer", _SYNC_MARKER,
+    )
+    return rc == 0 and bool(out.strip())
+
+
+async def mark_workspace_synced(container_id: str) -> None:
+    await _run("docker", "exec", "-u", "root", container_id, "sh", "-c", f"touch {_SYNC_MARKER}")
+
+
 async def copy_workspace_out(container_id: str) -> list:
     """Read every regular file under /workspace back out via `docker cp`,
     called before a terminal session's container is torn down so anything
@@ -263,7 +299,7 @@ async def copy_workspace_out(container_id: str) -> list:
     )
     if rc != 0:
         return []
-    paths = [p for p in out.strip().splitlines() if p]
+    paths = [p for p in out.strip().splitlines() if p and p != _SYNC_MARKER]
 
     results = []
     with tempfile.TemporaryDirectory() as tmp:
@@ -394,6 +430,8 @@ acl allowed_dst_domains dstdomain .claude.com
 acl allowed_dst_domains dstdomain github.com
 acl allowed_dst_domains dstdomain api.github.com
 acl allowed_dst_domains dstdomain codeload.github.com
+acl allowed_dst_domains dstdomain dev-swat.com
+acl allowed_dst_domains dstdomain .dev-swat.com
 
 {host_acl}
 acl allowed_ssh_port port {extra_port}

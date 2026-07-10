@@ -15,6 +15,7 @@ from .. import sessions as sessions_crud
 from .. import docker_manager
 from .. import gateway_files
 from .. import ssh_hosts
+from .. import workspace_tokens
 from ..byok import fetch_anthropic_key
 
 router = APIRouter()
@@ -96,9 +97,18 @@ async def create_terminal(
         )
         mount_ssh_identity = True
 
+    # Scoped platform API token (agents:*/builder:*) - only meaningful when
+    # this terminal is tied to a real workspace (body.project_id IS the
+    # workspace_id once the frontend derives terminal_id from it, see
+    # ORG_Frontend's terminalSession.ts). No workspace context, no token.
+    workspace_token = None
+    if body.project_id:
+        workspace_token = await workspace_tokens.mint_workspace_token(body.user_id, body.project_id)
+
     container_id, created = await docker_manager.create_container(
         body.terminal_id, body.user_id, anthropic_key,
         egress_proxy_url=egress_proxy_url, mount_ssh_identity=mount_ssh_identity,
+        workspace_token=workspace_token,
     )
     container_name = docker_manager.container_name_for(body.terminal_id)
     await sessions_crud.mark_running(body.terminal_id, container_id, container_name, db)

@@ -65,6 +65,21 @@ async def list_sessions_for_user(
     return list(result.scalars().all())
 
 
+async def list_running_sessions_with_project(db: AsyncSession) -> List[TerminalSession]:
+    """Every currently-running session that has a project_id to sync
+    against - used by the periodic workspace-sync reconciliation loop
+    (see workspace_sync.py). Sessions with no project_id have nothing to
+    sync to, so they're excluded up front rather than filtered per-tick.
+    """
+    result = await db.execute(
+        select(TerminalSession).where(
+            TerminalSession.status == "running",
+            TerminalSession.project_id.isnot(None),
+        )
+    )
+    return list(result.scalars().all())
+
+
 async def touch_last_active(
     terminal_id: str,
     db: AsyncSession,

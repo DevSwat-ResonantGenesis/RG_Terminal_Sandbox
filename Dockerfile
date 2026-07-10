@@ -17,6 +17,7 @@ COPY app ./app
 COPY alembic ./alembic
 COPY alembic.ini .
 COPY sandbox-image ./sandbox-image
+COPY egress-proxy-image ./egress-proxy-image
 
 EXPOSE 8000
 

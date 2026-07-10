@@ -430,7 +430,6 @@ acl allowed_dst_domains dstdomain .claude.com
 acl allowed_dst_domains dstdomain github.com
 acl allowed_dst_domains dstdomain api.github.com
 acl allowed_dst_domains dstdomain codeload.github.com
-acl allowed_dst_domains dstdomain dev-swat.com
 acl allowed_dst_domains dstdomain .dev-swat.com
 
 {host_acl}

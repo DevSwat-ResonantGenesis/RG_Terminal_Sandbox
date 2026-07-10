@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     AUTH_SERVICE_URL: str = os.getenv("AUTH_SERVICE_URL", "http://auth_service:8000")
     STORAGE_SERVICE_URL: str = os.getenv("STORAGE_SERVICE_URL", "http://storage_service:8000")
     BILLING_SERVICE_URL: str = os.getenv("BILLING_SERVICE_URL", "http://billing_service:8000")
+    GATEWAY_URL: str = os.getenv("GATEWAY_URL", "http://gateway:8000")
+    # Distinct from INTERNAL_SERVICE_KEY above (that one verifies INCOMING
+    # gateway -> this service calls). This is the generic fleet-wide secret
+    # RG_Gateway's own code_routes.py checks on its /code/internal/* routes
+    # (same one git_routes.py already sends when Gateway calls RG_Auth) -
+    # needed here because this service is now an OUTGOING caller of Gateway.
+    GATEWAY_INTERNAL_SERVICE_KEY: str = os.getenv("INTERNAL_SERVICE_KEY", "")
 
     # Sandbox container defaults - larger than the short-lived snippet-exec
     # baseline (RG_Code_Execution's CodeExecutor uses 256m/0.5cpu) because this
@@ -58,6 +65,15 @@ class Settings(BaseSettings):
 
     IDLE_TIMEOUT_SECONDS: int = int(os.getenv("TERMINAL_SANDBOX_IDLE_TIMEOUT_SECONDS", "3600"))
     REAPER_INTERVAL_SECONDS: int = int(os.getenv("TERMINAL_SANDBOX_REAPER_INTERVAL_SECONDS", "300"))
+
+    # Opt-in per-user SSH egress (see docker_manager.create_egress_proxy).
+    # app-network is the second leg every per-session sidecar joins to reach
+    # the real internet, mirroring how the shared terminal_egress_proxy is
+    # dual-homed (RG_core/docker-compose.unified.yml).
+    APP_NETWORK: str = os.getenv("TERMINAL_SANDBOX_APP_NETWORK", "app-network")
+    EGRESS_PROXY_IMAGE: str = os.getenv(
+        "TERMINAL_SANDBOX_EGRESS_PROXY_IMAGE", "rg-terminal-egress-proxy-image:latest"
+    )
 
     class Config:
         env_prefix = "TERMINAL_SANDBOX_"

@@ -13,6 +13,8 @@ from ..config import settings
 from ..db import get_db
 from .. import sessions as sessions_crud
 from .. import docker_manager
+from .. import gateway_files
+from .. import ssh_hosts
 from ..byok import fetch_anthropic_key
 
 router = APIRouter()
@@ -81,9 +83,33 @@ async def create_terminal(
         raise HTTPException(status_code=403, detail="terminal_id owned by another user")
 
     anthropic_key = await fetch_anthropic_key(body.user_id)
-    container_id = await docker_manager.create_container(body.terminal_id, body.user_id, anthropic_key)
+
+    # Opt-in SSH egress: only touches anything for a user who has explicitly
+    # registered a host. Every other user gets the exact same shared-proxy
+    # path as before - see docker_manager.create_egress_proxy.
+    egress_proxy_url = None
+    mount_ssh_identity = False
+    registered_host = await ssh_hosts.get_registered_host(body.user_id)
+    if registered_host:
+        egress_proxy_url = await docker_manager.create_egress_proxy(
+            body.terminal_id, registered_host["host"], registered_host["port"]
+        )
+        mount_ssh_identity = True
+
+    container_id, created = await docker_manager.create_container(
+        body.terminal_id, body.user_id, anthropic_key,
+        egress_proxy_url=egress_proxy_url, mount_ssh_identity=mount_ssh_identity,
+    )
     container_name = docker_manager.container_name_for(body.terminal_id)
     await sessions_crud.mark_running(body.terminal_id, container_id, container_name, db)
+
+    # Sync the user's existing IDE project files into /workspace - only on
+    # genuine creation (not a reconnect to an already-running container, which
+    # would clobber any in-progress local changes with the last-synced copy).
+    if created and body.project_id:
+        files = await gateway_files.fetch_project_files(body.project_id, body.user_id)
+        if files:
+            await docker_manager.copy_files_into_container(container_id, files)
 
     session = await sessions_crud.get_session_by_terminal_id(body.terminal_id, db)
     return _session_to_dict(session)
@@ -113,8 +139,20 @@ async def delete_terminal(
     if session is None:
         raise HTTPException(status_code=404, detail="Terminal not found")
 
+    # Sync /workspace back to the IDE's project storage before the container
+    # (and its volume) is gone for good.
+    if session.project_id:
+        container_id = await docker_manager.find_container_id(terminal_id)
+        if container_id:
+            files = await docker_manager.copy_workspace_out(container_id)
+            for f in files:
+                await gateway_files.write_project_file(
+                    session.project_id, f["file_path"], f["content"], str(session.user_id)
+                )
+
     await docker_manager.stop_container(terminal_id)
     await docker_manager.remove_container(terminal_id)
+    await docker_manager.remove_egress_proxy(terminal_id)
     await sessions_crud.mark_closed(terminal_id, db, status="stopped")
 
     return {"success": True, "terminal_id": terminal_id}
@@ -129,3 +167,19 @@ async def heartbeat(
     _require_internal(request)
     await sessions_crud.touch_last_active(terminal_id, db)
     return {"success": True}
+
+
+@router.post("/internal/ssh-keys/{user_id}")
+async def get_or_create_ssh_key(user_id: str, request: Request):
+    """Ensure this user has an SSH keypair in their persistent identity
+    volume and return the public half, for display right after they
+    register a host in account settings (see RG_Auth's UserSshHost). The
+    private key is never included in this response - see
+    docker_manager.ensure_ssh_keypair's docstring for where it actually lives.
+    """
+    _require_internal(request)
+    public_key = await docker_manager.ensure_ssh_keypair(user_id)
+    if not public_key:
+        raise HTTPException(status_code=500, detail="Failed to generate SSH keypair")
+    await ssh_hosts.report_fingerprint(user_id, public_key)
+    return {"public_key": public_key}

@@ -14,6 +14,7 @@ async def lifespan(app: FastAPI):
     print(f"Starting {settings.SERVICE_NAME} v{settings.VERSION}...")
     await check_database_connection()
     await docker_manager.ensure_sandbox_image_built()
+    await docker_manager.ensure_egress_proxy_image_built()
     yield
     print(f"Shutting down {settings.SERVICE_NAME}...")
 

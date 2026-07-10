@@ -121,10 +121,13 @@ async def create_terminal(
         if files:
             await docker_manager.copy_files_into_container(container_id, files)
 
-    # After the project's own files land (which may include their own
-    # CLAUDE.md) - write_claude_md appends rather than overwrites, so
-    # project-specific instructions and the platform-access doc coexist.
-    if created and workspace_token:
+    # Refresh the platform-access CLAUDE.md on every connect, not just
+    # genuine creation - most real sessions today are reconnects to a
+    # container that predates this feature, so gating on `created` meant
+    # it silently never wrote for anyone already using the terminal.
+    # write_claude_md replaces its own marked section idempotently, so
+    # this is safe to call every time without duplicating content.
+    if workspace_token:
         await docker_manager.write_claude_md(container_id, workspace_token)
 
     session = await sessions_crud.get_session_by_terminal_id(body.terminal_id, db)

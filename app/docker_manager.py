@@ -169,27 +169,36 @@ async def write_claude_md(container_id: str, workspace_token: Optional[str]) -> 
     if not workspace_token:
         return
 
-    content = f"""# Platform API access
+    begin_marker = "<!-- BEGIN RG_PLATFORM_ACCESS -->"
+    end_marker = "<!-- END RG_PLATFORM_ACCESS -->"
 
-This workspace has a scoped platform access token in `$RG_WORKSPACE_TOKEN`,
-valid for the account that owns this workspace. Use it to call the
-platform's own API directly with `curl` (or any HTTP client) - you are not
-limited to local files; you can create, inspect, and modify this user's
-Agent OS agents and Builder projects on their behalf.
+    content = f"""{begin_marker}
+# You are running inside the DevSwat platform
+
+This is a sandboxed terminal on the DevSwat platform (dev-swat.com), not a
+generic shell. You have real, working API access to the account that owns
+this workspace - not just local files. If the user asks what platform
+they're on, whether you can see/manage their agents, or to create/modify
+something on the platform, the answer is yes, via the API below - don't
+say you only have generic file/bash tools.
+
+This workspace has a scoped platform access token in the `$RG_WORKSPACE_TOKEN`
+environment variable. Use it to call the platform's own API directly with
+`curl` (or any HTTP client).
 
 Base URL: `https://dev-swat.com/api/v1`
 Auth header: `Authorization: Bearer $RG_WORKSPACE_TOKEN`
 Scopes granted: `agents:*`, `builder:*` (full create/read/update/delete on
 both - nothing outside these two areas is accessible with this token).
 
-## Agent OS (custom agents)
+## Agent OS (the user's custom AI agents - "how many agents do I have" etc.)
 
 - List the user's agents: `curl -H "Authorization: Bearer $RG_WORKSPACE_TOKEN" https://dev-swat.com/api/v1/agents/`
 - Create an agent: `curl -X POST -H "Authorization: Bearer $RG_WORKSPACE_TOKEN" -H "Content-Type: application/json" https://dev-swat.com/api/v1/agents/ -d '{{"name": "...", "description": "...", "system_prompt": "...", "model": "...", "tools": [...]}}'`
 - Update an agent: `curl -X PATCH -H "Authorization: Bearer $RG_WORKSPACE_TOKEN" -H "Content-Type: application/json" https://dev-swat.com/api/v1/agents/{{agent_id}} -d '{{"system_prompt": "..."}}'`
 - Delete (archive) an agent: `curl -X DELETE -H "Authorization: Bearer $RG_WORKSPACE_TOKEN" https://dev-swat.com/api/v1/agents/{{agent_id}}`
 
-## Builder (generated projects)
+## Builder (the user's generated projects)
 
 - Generate a new project: `curl -X POST -H "Authorization: Bearer $RG_WORKSPACE_TOKEN" -H "Content-Type: application/json" https://dev-swat.com/api/v1/code/project/generate -d '{{"description": "...", "project_type": "react"}}'`
 - Modify an existing project: `curl -X POST -H "Authorization: Bearer $RG_WORKSPACE_TOKEN" -H "Content-Type: application/json" https://dev-swat.com/api/v1/code/project-builder/projects/{{project_id}}/modify -d '{{"modification_request": "..."}}'`
@@ -197,21 +206,24 @@ both - nothing outside these two areas is accessible with this token).
 If the user asks you to create an agent, wire an agent up, or build/modify
 a project, you have real access to do it via the endpoints above - not
 just describe how they'd do it themselves.
-"""
+{end_marker}"""
 
     import tempfile
     with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
         f.write(content)
         local_path = f.name
     try:
-        # Copy to a scratch path first, then append into /workspace/CLAUDE.md
-        # rather than overwrite it - the project's own files (just synced in
-        # by the caller) may already have a CLAUDE.md with real project
-        # instructions Claude still needs.
+        # Copy to a scratch path, then splice into /workspace/CLAUDE.md:
+        # delete any previous marked block first (idempotent across repeated
+        # calls on every reconnect) and append the fresh one, rather than
+        # overwriting the whole file - the project's own synced files may
+        # already have a CLAUDE.md with real project-specific instructions.
         rc, _, err = await _run("docker", "cp", local_path, f"{container_id}:/tmp/.rg_platform_access.md")
         if rc == 0:
             await _run(
                 "docker", "exec", "-u", "root", container_id, "sh", "-c",
+                "touch /workspace/CLAUDE.md && "
+                f"sed -i '\\#{begin_marker}#,\\#{end_marker}#d' /workspace/CLAUDE.md && "
                 "cat /tmp/.rg_platform_access.md >> /workspace/CLAUDE.md && "
                 "rm -f /tmp/.rg_platform_access.md && "
                 f"chown {settings.SANDBOX_UID} /workspace/CLAUDE.md",

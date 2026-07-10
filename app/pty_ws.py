@@ -12,6 +12,7 @@ RG_Axtention_IDE/app/pty_stream.py client contract):
                     {"type": "resize", "cols": <int>, "rows": <int>}
 """
 import asyncio
+import codecs
 import fcntl
 import json
 import logging
@@ -76,12 +77,19 @@ async def terminal_pty(websocket: WebSocket, terminal_id: str):
     loop.add_reader(fd, _on_readable)
 
     async def pump_output():
+        # A stateful incremental decoder, not data.decode() per chunk - PTY
+        # reads are chopped at arbitrary byte boundaries, and Claude Code's
+        # UI leans on multi-byte Unicode (box-drawing, "❯", etc). Decoding
+        # each chunk independently corrupts any character split across two
+        # reads; the incremental decoder holds back a trailing partial
+        # sequence and completes it with the next chunk instead.
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         while True:
             data = await output_queue.get()
             if data is None:
                 break
             try:
-                await websocket.send_json({"type": "output", "data": data.decode("utf-8", errors="replace")})
+                await websocket.send_json({"type": "output", "data": decoder.decode(data)})
             except Exception:
                 break
 

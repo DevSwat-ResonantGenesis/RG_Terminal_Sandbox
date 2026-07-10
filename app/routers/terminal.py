@@ -121,6 +121,12 @@ async def create_terminal(
         if files:
             await docker_manager.copy_files_into_container(container_id, files)
 
+    # After the project's own files land (which may include their own
+    # CLAUDE.md) - write_claude_md appends rather than overwrites, so
+    # project-specific instructions and the platform-access doc coexist.
+    if created and workspace_token:
+        await docker_manager.write_claude_md(container_id, workspace_token)
+
     session = await sessions_crud.get_session_by_terminal_id(body.terminal_id, db)
     return _session_to_dict(session)
 

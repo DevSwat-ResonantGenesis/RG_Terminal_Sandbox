@@ -158,6 +158,70 @@ async def create_container(
     return container_id, True
 
 
+async def write_claude_md(container_id: str, workspace_token: Optional[str]) -> None:
+    """Claude Code CLI automatically reads a CLAUDE.md in its cwd as project
+    context - this is the only way Claude actually discovers RG_WORKSPACE_TOKEN
+    and what it's for. Printing a shell banner (terminal-banner.sh) is not
+    enough: that text only reaches a human looking at the raw terminal, not
+    Claude's own context, which is why "do you have access to my Agent OS"
+    used to get an honest "no" even with a real token sitting in the env.
+    """
+    if not workspace_token:
+        return
+
+    content = f"""# Platform API access
+
+This workspace has a scoped platform access token in `$RG_WORKSPACE_TOKEN`,
+valid for the account that owns this workspace. Use it to call the
+platform's own API directly with `curl` (or any HTTP client) - you are not
+limited to local files; you can create, inspect, and modify this user's
+Agent OS agents and Builder projects on their behalf.
+
+Base URL: `https://dev-swat.com/api/v1`
+Auth header: `Authorization: Bearer $RG_WORKSPACE_TOKEN`
+Scopes granted: `agents:*`, `builder:*` (full create/read/update/delete on
+both - nothing outside these two areas is accessible with this token).
+
+## Agent OS (custom agents)
+
+- List the user's agents: `curl -H "Authorization: Bearer $RG_WORKSPACE_TOKEN" https://dev-swat.com/api/v1/agents/`
+- Create an agent: `curl -X POST -H "Authorization: Bearer $RG_WORKSPACE_TOKEN" -H "Content-Type: application/json" https://dev-swat.com/api/v1/agents/ -d '{{"name": "...", "description": "...", "system_prompt": "...", "model": "...", "tools": [...]}}'`
+- Update an agent: `curl -X PATCH -H "Authorization: Bearer $RG_WORKSPACE_TOKEN" -H "Content-Type: application/json" https://dev-swat.com/api/v1/agents/{{agent_id}} -d '{{"system_prompt": "..."}}'`
+- Delete (archive) an agent: `curl -X DELETE -H "Authorization: Bearer $RG_WORKSPACE_TOKEN" https://dev-swat.com/api/v1/agents/{{agent_id}}`
+
+## Builder (generated projects)
+
+- Generate a new project: `curl -X POST -H "Authorization: Bearer $RG_WORKSPACE_TOKEN" -H "Content-Type: application/json" https://dev-swat.com/api/v1/code/project/generate -d '{{"description": "...", "project_type": "react"}}'`
+- Modify an existing project: `curl -X POST -H "Authorization: Bearer $RG_WORKSPACE_TOKEN" -H "Content-Type: application/json" https://dev-swat.com/api/v1/code/project-builder/projects/{{project_id}}/modify -d '{{"modification_request": "..."}}'`
+
+If the user asks you to create an agent, wire an agent up, or build/modify
+a project, you have real access to do it via the endpoints above - not
+just describe how they'd do it themselves.
+"""
+
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
+        f.write(content)
+        local_path = f.name
+    try:
+        # Copy to a scratch path first, then append into /workspace/CLAUDE.md
+        # rather than overwrite it - the project's own files (just synced in
+        # by the caller) may already have a CLAUDE.md with real project
+        # instructions Claude still needs.
+        rc, _, err = await _run("docker", "cp", local_path, f"{container_id}:/tmp/.rg_platform_access.md")
+        if rc == 0:
+            await _run(
+                "docker", "exec", "-u", "root", container_id, "sh", "-c",
+                "cat /tmp/.rg_platform_access.md >> /workspace/CLAUDE.md && "
+                "rm -f /tmp/.rg_platform_access.md && "
+                f"chown {settings.SANDBOX_UID} /workspace/CLAUDE.md",
+            )
+        else:
+            logger.warning(f"write_claude_md: failed to copy CLAUDE.md: {err}")
+    finally:
+        os.remove(local_path)
+
+
 async def _seed_ssh_identity(container_id: str) -> None:
     """Copy the user's persistent SSH private key from the read-only
     /mnt/ssh_identity mount into ~/.ssh inside the container's ephemeral

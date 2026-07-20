@@ -182,14 +182,20 @@ they're on, whether you can see/manage their agents, or to create/modify
 something on the platform, the answer is yes, via the API below - don't
 say you only have generic file/bash tools.
 
-This workspace has a scoped platform access token in the `$RG_WORKSPACE_TOKEN`
-environment variable. Use it to call the platform's own API directly with
-`curl` (or any HTTP client).
+This workspace has a platform access token in the `$RG_WORKSPACE_TOKEN`
+environment variable, scoped to this account (not a shared/service
+credential). Use it to call the platform's own API directly with `curl`
+(or any HTTP client) - this reaches virtually the entire platform API as
+this user, not just the two categories in the examples below.
 
 Base URL: `https://dev-swat.com/api/v1`
 Auth header: `Authorization: Bearer $RG_WORKSPACE_TOKEN`
-Scopes granted: `agents:*`, `builder:*` (full create/read/update/delete on
-both - nothing outside these two areas is accessible with this token).
+
+Full API catalog: `curl -H "Authorization: Bearer $RG_WORKSPACE_TOKEN" https://dev-swat.com/openapi.json`
+(or open `https://dev-swat.com/docs` in a browser) lists every endpoint
+this token can call, with request/response schemas - check there first for
+anything not covered by the two starter examples below, rather than
+assuming an area is off-limits.
 
 ## Agent OS (the user's custom AI agents - "how many agents do I have" etc.)
 
@@ -203,9 +209,11 @@ both - nothing outside these two areas is accessible with this token).
 - Generate a new project: `curl -X POST -H "Authorization: Bearer $RG_WORKSPACE_TOKEN" -H "Content-Type: application/json" https://dev-swat.com/api/v1/code/project/generate -d '{{"description": "...", "project_type": "react"}}'`
 - Modify an existing project: `curl -X POST -H "Authorization: Bearer $RG_WORKSPACE_TOKEN" -H "Content-Type: application/json" https://dev-swat.com/api/v1/code/project-builder/projects/{{project_id}}/modify -d '{{"modification_request": "..."}}'`
 
-If the user asks you to create an agent, wire an agent up, or build/modify
-a project, you have real access to do it via the endpoints above - not
-just describe how they'd do it themselves.
+If the user asks you to create an agent, wire an agent up, build/modify a
+project, or use any other platform feature (chat, memory search, workflows,
+billing, etc.), you have real access to do it via the API - check
+`/openapi.json` for the exact endpoint rather than assuming you can't, and
+don't just describe how they'd do it themselves.
 {end_marker}"""
 
     import tempfile
@@ -333,6 +341,22 @@ async def copy_files_into_container(container_id: str, files: list) -> None:
 
 
 _SYNC_MARKER = "/workspace/.rg_last_sync"
+
+
+async def workspace_is_empty(container_id: str) -> bool:
+    """True if /workspace has no real project files - only CLAUDE.md (written
+    by write_claude_md on every connect) and/or the sync marker, or nothing
+    at all. Used to safely re-seed a reused container that was never
+    actually populated (e.g. a session opened before a project_id got
+    correctly linked to its files) without risking clobbering real work a
+    user has already done inside a properly-seeded container.
+    """
+    rc, out, _ = await _run("docker", "exec", container_id, "find", "/workspace", "-type", "f")
+    if rc != 0:
+        return True
+    ignorable = {"/workspace/CLAUDE.md", _SYNC_MARKER}
+    real_files = [p for p in out.strip().splitlines() if p and p not in ignorable]
+    return not real_files
 
 
 async def workspace_changed_since_last_sync(container_id: str) -> bool:

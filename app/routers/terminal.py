@@ -113,10 +113,16 @@ async def create_terminal(
     container_name = docker_manager.container_name_for(body.terminal_id)
     await sessions_crud.mark_running(body.terminal_id, container_id, container_name, db)
 
-    # Sync the user's existing IDE project files into /workspace - only on
-    # genuine creation (not a reconnect to an already-running container, which
-    # would clobber any in-progress local changes with the last-synced copy).
-    if created and body.project_id:
+    # Sync the user's existing IDE project files into /workspace - on genuine
+    # creation, or on a reconnect to a container that was never actually
+    # populated (e.g. a session opened before its project_id was correctly
+    # linked to Hash Sphere files - a real historical bug, not hypothetical).
+    # Never touches a container that already has real content: that would
+    # clobber in-progress local changes with the last-synced copy.
+    should_seed = created or (
+        bool(body.project_id) and await docker_manager.workspace_is_empty(container_id)
+    )
+    if should_seed and body.project_id:
         files = await gateway_files.fetch_project_files(body.project_id, body.user_id)
         if files:
             await docker_manager.copy_files_into_container(container_id, files)
